@@ -18,6 +18,7 @@ matplotlib.use("TkAgg")
 CONFIG_DIR = Path.home() / ".g6_ink_studio"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
+from ai_enhance import refine_channels
 from color_model import (
     DEFAULT_ABSORBANCE,
     DEFAULT_PINV,
@@ -130,6 +131,8 @@ class InkSeparationApp:
         self.global_gain = tk.DoubleVar(value=1.0)
         self.global_offset = tk.DoubleVar(value=0.0)
         self.view_gamma = tk.DoubleVar(value=1.0)
+        self.ai_enabled = tk.BooleanVar(value=False)
+        self.ai_strength = tk.DoubleVar(value=0.2)
         self._load_settings()
 
         # UI 생성
@@ -349,6 +352,21 @@ class InkSeparationApp:
             variable=self.view_gamma,
             command=lambda _=None: self._process_image(),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        ai_frame = ttk.Labelframe(control, text="AI Enhance (exp.)", padding=8, style="Card.TLabelframe")
+        ai_frame.pack(fill=tk.X, pady=(6, 8))
+        ttk.Checkbutton(
+            ai_frame, text="Enable AI edge-guided smoothing", variable=self.ai_enabled, command=self._process_image
+        ).pack(anchor=tk.W)
+        ttk.Label(ai_frame, text="Strength", style="Muted.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        ttk.Scale(
+            ai_frame,
+            from_=0.0,
+            to=0.5,
+            orient=tk.HORIZONTAL,
+            variable=self.ai_strength,
+            command=lambda _=None: self._process_image(),
+        ).pack(fill=tk.X)
 
         ttk.Label(control, text="Composite Preview", style="Small.TLabel").pack(
             anchor=tk.W, pady=(8, 4)
@@ -602,6 +620,10 @@ class InkSeparationApp:
 
         # 고급 대비 보정
         channels = self._enhance_channel_maps(channels)
+
+        # AI 실험적 스무딩
+        if self.ai_enabled.get():
+            channels = refine_channels(rgb, channels, strength=float(self.ai_strength.get()), blur_k=5)
 
         return {
             "cyan": channels[..., 0],
