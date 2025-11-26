@@ -1,4 +1,6 @@
+import os
 import sys
+import json
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
@@ -12,6 +14,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 matplotlib.use("TkAgg")
+
+CONFIG_DIR = Path.home() / ".g6_ink_studio"
+CONFIG_PATH = CONFIG_DIR / "config.json"
 
 from color_model import (
     DEFAULT_ABSORBANCE,
@@ -33,6 +38,31 @@ INK_CHANNELS = [
     {"key": "gray", "label": "Gray", "hex": "#9e9e9e"},
 ]
 
+CALIB_PRESETS = {
+    "Orthogonal CMY (default)": [
+        [0.95, 0.00, 0.00, 0.70, 0.30, 0.33],
+        [0.00, 0.95, 0.00, 0.70, 0.55, 0.33],
+        [0.00, 0.00, 0.95, 0.70, 0.55, 0.33],
+    ],
+    "Neutral Gray Boost": [
+        [0.95, 0.00, 0.00, 0.70, 0.30, 0.45],
+        [0.00, 0.95, 0.00, 0.70, 0.55, 0.45],
+        [0.00, 0.00, 0.95, 0.70, 0.55, 0.45],
+    ],
+    "Soft Black": [
+        [0.90, 0.00, 0.00, 0.55, 0.25, 0.30],
+        [0.00, 0.90, 0.00, 0.55, 0.50, 0.30],
+        [0.00, 0.00, 0.90, 0.55, 0.50, 0.30],
+    ],
+}
+
+PRIMARY = "#4caf50"
+BG_MAIN = "#1c1c1c"
+CARD = "#252525"
+TEXT = "#f3f3f3"
+MUTED = "#cfcfcf"
+BORDER = "#2f2f2f"
+
 
 def _hex_to_rgb01(code: str) -> tuple[float, float, float]:
     code = code.lstrip("#")
@@ -50,9 +80,9 @@ def _hex_to_rgb255(code: str) -> tuple[int, int, int]:
 class InkSeparationApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("G695 Ink Separation Lab")
+        self.root.title("G6 Ink Studio")
         self.root.geometry("1380x880")
-        self.root.configure(bg="#1c1c1c")
+        self.root.configure(bg=BG_MAIN)
 
         # 상태
         self.original_path: Path | None = None
@@ -88,10 +118,14 @@ class InkSeparationApp:
         self.sim_canvas: FigureCanvasTkAgg | None = None
         self.auto_render = tk.BooleanVar(value=True)
         self.sim_info: tk.StringVar | None = None
+        self.preview_quality = tk.StringVar(value="Medium")
+        self.calib_preset = tk.StringVar(value="Orthogonal CMY (default)")
+        self._load_settings()
 
         # UI 생성
         self._build_layout()
         self._set_dark_style()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _set_dark_style(self) -> None:
         style = ttk.Style(self.root)
@@ -99,20 +133,47 @@ class InkSeparationApp:
             style.theme_use("aqua")
         else:
             style.theme_use("clam")
-        style.configure("TFrame", background="#1c1c1c")
-        style.configure("TLabel", background="#1c1c1c", foreground="#f3f3f3")
-        style.configure("TCheckbutton", background="#1c1c1c", foreground="#f3f3f3")
-        style.configure("TButton", padding=8)
-        style.configure("Big.TLabel", font=("Helvetica", 17, "bold"))
-        style.configure("Small.TLabel", font=("Helvetica", 10))
-        style.configure("Card.TFrame", background="#252525", relief="ridge", borderwidth=1)
-        style.configure("Title.TLabel", font=("Helvetica", 20, "bold"))
-        style.configure("Muted.TLabel", font=("Helvetica", 10), foreground="#cfcfcf")
-        style.configure("Badge.TLabel", font=("Helvetica", 9, "bold"), foreground="#111", background="#4caf50")
-        style.configure("Card.TLabelframe", background="#252525", relief="ridge", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background="#252525", foreground="#f3f3f3", font=("Helvetica", 11, "bold"))
+
+        style.configure("TFrame", background=BG_MAIN)
+        style.configure("TLabel", background=BG_MAIN, foreground=TEXT)
+        style.configure("TCheckbutton", background=BG_MAIN, foreground=TEXT)
+        style.configure("TButton", padding=8, background=CARD, foreground=TEXT)
+        style.map(
+            "TButton",
+            background=[("active", "#3a3a3a")],
+            foreground=[("active", "#ffffff")],
+        )
+        style.configure("Big.TLabel", font=("Helvetica", 17, "bold"), foreground=TEXT, background=BG_MAIN)
+        style.configure("Small.TLabel", font=("Helvetica", 10), foreground=TEXT, background=BG_MAIN)
+        style.configure("Card.TFrame", background=CARD, relief="ridge", borderwidth=1)
+        style.configure("Card.TLabelframe", background=CARD, relief="ridge", borderwidth=1)
+        style.configure("Card.TLabelframe.Label", background=CARD, foreground=TEXT, font=("Helvetica", 11, "bold"))
+        style.configure("Title.TLabel", font=("Helvetica", 20, "bold"), foreground=TEXT, background=BG_MAIN)
+        style.configure("Muted.TLabel", font=("Helvetica", 10), foreground=MUTED, background=BG_MAIN)
+        style.configure("Badge.TLabel", font=("Helvetica", 9, "bold"), foreground="#ffffff", background=PRIMARY)
+        style.configure("Status.TFrame", background=CARD, relief="ridge", borderwidth=1)
+        style.configure("Status.TLabel", background=CARD, foreground=MUTED, font=("Helvetica", 10))
 
     def _build_layout(self) -> None:
+        # 메뉴바
+        menubar = tk.Menu(self.root)
+        filemenu = tk.Menu(menubar, tearoff=0)
+        filemenu.add_command(label="Open Image", command=self.open_image, accelerator="Cmd/Ctrl+O")
+        filemenu.add_command(label="Export All", command=self.export_all, accelerator="Cmd/Ctrl+E")
+        filemenu.add_command(label="Open Exports", command=self._open_exports_folder)
+        filemenu.add_separator()
+        filemenu.add_command(label="Quit", command=self._on_close, accelerator="Cmd/Ctrl+Q")
+        menubar.add_cascade(label="File", menu=filemenu)
+        helpmenu = tk.Menu(menubar, tearoff=0)
+        helpmenu.add_command(label="Simulator", command=self.open_simulator, accelerator="Cmd/Ctrl+S")
+        menubar.add_cascade(label="Tools", menu=helpmenu)
+        self.root.config(menu=menubar)
+        # 단축키
+        self.root.bind_all("<Command-o>" if sys.platform == "darwin" else "<Control-o>", lambda e: self.open_image())
+        self.root.bind_all("<Command-e>" if sys.platform == "darwin" else "<Control-e>", lambda e: self.export_all())
+        self.root.bind_all("<Command-s>" if sys.platform == "darwin" else "<Control-s>", lambda e: self.open_simulator())
+        self.root.bind_all("<Command-q>" if sys.platform == "darwin" else "<Control-q>", lambda e: self._on_close())
+
         # 좌측 제어 패널 (고정 폭)
         control = ttk.Frame(self.root, padding=16, style="TFrame")
         control.pack(side=tk.LEFT, fill=tk.Y, anchor=tk.N)
@@ -120,7 +181,7 @@ class InkSeparationApp:
         # 헤더
         header = ttk.Frame(control, style="TFrame")
         header.pack(fill=tk.X, pady=(0, 12))
-        ttk.Label(header, text="G695 Ink Lab", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(header, text="G6 Ink Studio", style="Title.TLabel").pack(anchor=tk.W)
         ttk.Label(
             header,
             text="6채널 분리 · 확인 · 내보내기",
@@ -137,6 +198,9 @@ class InkSeparationApp:
             side=tk.LEFT
         )
         ttk.Button(btn_row, text="Simulator", command=self.open_simulator).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(btn_row, text="Open Exports", command=self._open_exports_folder).pack(
             side=tk.LEFT, padx=(6, 0)
         )
 
@@ -180,6 +244,18 @@ class InkSeparationApp:
             style="Muted.TLabel",
             wraplength=260,
         ).pack(anchor=tk.W, pady=(0, 8))
+
+        ttk.Label(control, text="Preview Quality", style="Small.TLabel").pack(anchor=tk.W, pady=(6, 2))
+        quality_row = ttk.Frame(control, style="TFrame")
+        quality_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.OptionMenu(
+            quality_row,
+            self.preview_quality,
+            self.preview_quality.get(),
+            "Low",
+            "Medium",
+            "High",
+        ).pack(side=tk.LEFT, anchor=tk.W)
 
         ttk.Label(control, text="Composite Preview", style="Small.TLabel").pack(
             anchor=tk.W, pady=(8, 4)
@@ -274,6 +350,16 @@ class InkSeparationApp:
         calib_btns.pack(fill=tk.X, pady=(6, 0))
         ttk.Button(calib_btns, text="Apply Matrix", command=self._apply_calibration).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(calib_btns, text="Reset Default", command=self._reset_calibration).pack(side=tk.LEFT)
+        preset_row = ttk.Frame(calib, style="TFrame")
+        preset_row.pack(fill=tk.X, pady=(6, 2))
+        ttk.Label(preset_row, text="Preset", style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.OptionMenu(
+            preset_row,
+            self.calib_preset,
+            self.calib_preset.get(),
+            *CALIB_PRESETS.keys(),
+            command=lambda _=None: self._apply_preset(),
+        ).pack(side=tk.LEFT)
         save_load = ttk.Frame(calib, style="TFrame")
         save_load.pack(fill=tk.X, pady=(4, 0))
         ttk.Button(save_load, text="Load JSON", command=self._load_calibration_file).pack(side=tk.LEFT, padx=(0, 4))
@@ -330,10 +416,10 @@ class InkSeparationApp:
             self.channel_labels[ch["key"]] = lbl
 
         # 상태바
-        status_bar = ttk.Frame(self.root, padding=6, style="Card.TFrame")
+        status_bar = ttk.Frame(self.root, padding=6, style="Status.TFrame")
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_bar_label = ttk.Label(
-            status_bar, text="Waiting for image...", style="Muted.TLabel"
+            status_bar, text="Waiting for image...", style="Status.TLabel"
         )
         self.status_bar_label.pack(side=tk.LEFT)
 
@@ -610,6 +696,17 @@ class InkSeparationApp:
             return
         self._set_status(f"Saved calibration: {Path(path).name}")
 
+    def _apply_preset(self) -> None:
+        name = self.calib_preset.get()
+        if name not in CALIB_PRESETS:
+            return
+        mat = np.array(CALIB_PRESETS[name], dtype=np.float32)
+        self.absorb_matrix = mat
+        self.absorb_pinv = compute_pinv(mat)
+        self._load_matrix_to_entries(mat)
+        self._process_image()
+        self._set_status(f"Preset applied: {name}")
+
     # --- Simulator ---
     def open_simulator(self) -> None:
         if not self.channel_images:
@@ -747,7 +844,8 @@ class InkSeparationApp:
 
         # 시뮬레이션 크기(프리뷰 축소)
         w, h = self.original_image.size
-        max_w = 700
+        quality_map = {"Low": 400, "Medium": 700, "High": 1200}
+        max_w = quality_map.get(self.preview_quality.get(), 700)
         if w > max_w:
             scale = max_w / w
             w_new = int(w * scale)
@@ -902,6 +1000,47 @@ class InkSeparationApp:
     def _set_status(self, text: str) -> None:
         self.status_bar_label.config(text=text)
         self.root.update_idletasks()
+
+    def _open_exports_folder(self) -> None:
+        export_dir = Path("exports").resolve()
+        export_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform == "darwin":
+                import subprocess
+
+                subprocess.Popen(["open", str(export_dir)])
+            elif sys.platform.startswith("win"):
+                os.startfile(str(export_dir))  # type: ignore[attr-defined]
+            else:
+                import subprocess
+
+                subprocess.Popen(["xdg-open", str(export_dir)])
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Error", f"폴더를 열 수 없습니다: {exc}")
+
+    def _load_settings(self) -> None:
+        try:
+            if CONFIG_PATH.exists():
+                data = json.loads(CONFIG_PATH.read_text())
+                self.preview_quality.set(data.get("preview_quality", "Medium"))
+                self.calib_preset.set(data.get("calib_preset", "Orthogonal CMY (default)"))
+        except Exception:
+            pass
+
+    def _save_settings(self) -> None:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            data = {
+                "preview_quality": self.preview_quality.get(),
+                "calib_preset": self.calib_preset.get(),
+            }
+            CONFIG_PATH.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        self._save_settings()
+        self.root.destroy()
 
 
 def main() -> None:

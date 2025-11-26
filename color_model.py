@@ -20,7 +20,6 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
 
 
 # 3x6 흡수 매트릭스: 각 채널이 R/G/B에 얼마나 빛을 흡수하는지 정의 (0~1)
-# 초기값을 보다 직교(순수 CMY)하게 조정해 채널 간 크로스톡을 줄였습니다.
 DEFAULT_ABSORBANCE = np.array(
     [
         # Cyan  Magenta  Yellow  Black  Red   Gray

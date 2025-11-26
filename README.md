@@ -25,12 +25,16 @@ pip install -r requirements.txt
 
 > 이미 저장소를 받아두었다면 `cd ~/G6-Ink-Studio && git pull`로 업데이트 후 위의 가상환경/실행 부분만 다시 실행하세요.
 
+### 더블클릭 실행(run.command)
+- macOS Finder에서 `run.command` 더블클릭으로 실행 가능.
+- 필요 시 권한 부여: `chmod +x run.command`
+- 가상환경(.venv)이 없는 경우 먼저 위 설치 단계를 완료하세요.
+
 ## 실행화면
 
 - 첫 화면: <img width="2740" height="1820" alt="image1" src="https://github.com/user-attachments/assets/78857a13-0e0f-443a-aafd-0c51c7f30fd9" />
 
 - 시뮬레이터: <img width="2784" height="1838" alt="image2" src="https://github.com/user-attachments/assets/396a4ea8-730d-4e88-bf99-f307e548f8ec" />
-
 
 ## 주요 기능
 
@@ -39,8 +43,8 @@ pip install -r requirements.txt
 - Red 잉크 부스트, Gray(무채색) 강조 슬라이더로 채널 분포 튜닝
 - 개별 채널 PNG와 선택된 채널 합성 이미지를 한 번에 저장
 - Export 시 6개 채널 PNG는 투명 배경 위에 해당 채널 색만 알파로 담긴 RGBA입니다(필름 겹치기용). 합성 PNG는 흡수 매트릭스로 재구성한 결과(원본 근사)를 저장합니다.
-- Calibration UI에서 흡수 매트릭스(3x6)를 편집/적용하고 JSON으로 저장/불러올 수 있습니다.
-- Simulator: 광원 색/밝기/위치, 플레이트 간격, 깊이 패럴럭스 조정 후 3D 뷰와 결과 프리뷰를 함께 확인할 수 있습니다. 광원-캔버스 사이에 없는 플레이트는 자동 제외됩니다. Live 토글로 실시간/수동 렌더를 전환할 수 있습니다.
+- Calibration UI: 흡수 매트릭스(3x6) 편집/적용, 프리셋 적용, JSON 저장/불러오기.
+- Simulator: 광원 색/밝기/위치, 플레이트 간격, 깊이 패럴럭스 조정 후 3D 뷰와 결과 프리뷰를 확인. 광원-캔버스 사이에 없는 플레이트는 자동 제외. Live 토글/퀄리티 설정 제공.
 
 ## 사용 흐름
 
