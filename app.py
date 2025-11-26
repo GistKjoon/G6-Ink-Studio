@@ -120,6 +120,8 @@ class InkSeparationApp:
         self.sim_info: tk.StringVar | None = None
         self.preview_quality = tk.StringVar(value="Medium")
         self.calib_preset = tk.StringVar(value="Orthogonal CMY (default)")
+        self.precision_mode = tk.StringVar(value="Standard")
+        self.contrast_boost = tk.DoubleVar(value=1.0)
         self._load_settings()
 
         # UI 생성
@@ -256,6 +258,27 @@ class InkSeparationApp:
             "Medium",
             "High",
         ).pack(side=tk.LEFT, anchor=tk.W)
+
+        ttk.Label(control, text="Separation Quality", style="Small.TLabel").pack(anchor=tk.W, pady=(6, 2))
+        pq_row = ttk.Frame(control, style="TFrame")
+        pq_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.OptionMenu(
+            pq_row,
+            self.precision_mode,
+            self.precision_mode.get(),
+            "Standard",
+            "High",
+            command=lambda _=None: self._process_image(),
+        ).pack(side=tk.LEFT, anchor=tk.W)
+        ttk.Label(control, text="Channel Contrast", style="Muted.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        ttk.Scale(
+            control,
+            from_=1.0,
+            to=2.0,
+            orient=tk.HORIZONTAL,
+            variable=self.contrast_boost,
+            command=lambda _=None: self._process_image(),
+        ).pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(control, text="Composite Preview", style="Small.TLabel").pack(
             anchor=tk.W, pady=(8, 4)
@@ -480,7 +503,8 @@ class InkSeparationApp:
 
     def compute_channels(self, img: Image.Image) -> dict[str, np.ndarray]:
         """RGB -> 6채널 잉크 분리 (흡수 매트릭스 기반 역변환)."""
-        rgb = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+        dtype = np.float64 if self.precision_mode.get() == "High" else np.float32
+        rgb = np.asarray(img.convert("RGB"), dtype=dtype) / 255.0
         rgb_lin = srgb_to_linear(rgb)
         channels = channels_from_rgb_linear(
             rgb_lin, absorb=self.absorb_matrix, pinv=self.absorb_pinv
@@ -492,6 +516,9 @@ class InkSeparationApp:
         channels[..., red_idx] *= float(self.red_boost.get())
         channels[..., gray_idx] *= float(self.gray_neutral.get())
         channels = np.clip(channels, 0.0, 1.0)
+
+        # 고급 대비 보정
+        channels = self._enhance_channel_maps(channels)
 
         return {
             "cyan": channels[..., 0],
@@ -911,6 +938,24 @@ class InkSeparationApp:
                 self._sim_status_label = info_lbl
             else:
                 info_label.configure(textvariable=self.sim_info)
+
+    def _enhance_channel_maps(self, channels: np.ndarray) -> np.ndarray:
+        """채널 대비 보정: 퍼센타일 스트레치 + 선택적 감마."""
+        # channels shape: (H, W, 6)
+        boost = float(self.contrast_boost.get())
+        out = np.empty_like(channels)
+        for idx in range(channels.shape[-1]):
+            ch = channels[..., idx]
+            lo, hi = np.percentile(ch, [0.5, 99.5])
+            if hi - lo < 1e-5:
+                out[..., idx] = ch
+                continue
+            ch = (ch - lo) / (hi - lo)
+            ch = np.clip(ch, 0.0, 1.0)
+            if boost > 1.0:
+                ch = np.clip(ch ** (1.0 / boost), 0.0, 1.0)
+            out[..., idx] = ch
+        return out
 
     def _update_3d_view(
         self, plate_count: int, spacing: float, lx: float, ly: float, lz: float, width: int, height: int
