@@ -133,6 +133,7 @@ class InkSeparationApp:
         self.view_gamma = tk.DoubleVar(value=1.0)
         self.ai_enabled = tk.BooleanVar(value=False)
         self.ai_strength = tk.DoubleVar(value=0.2)
+        self.image_info = tk.StringVar(value="No image")
         self._load_settings()
 
         # UI 생성
@@ -224,6 +225,9 @@ class InkSeparationApp:
         )
         ttk.Button(btn_row2, text="Reset Params", command=self._reset_params).pack(
             side=tk.LEFT
+        )
+        ttk.Button(btn_row2, text="Reset Tuning", command=self._reset_tuning).pack(
+            side=tk.LEFT, padx=(6, 0)
         )
 
         ttk.Separator(control, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
@@ -493,6 +497,8 @@ class InkSeparationApp:
             header_bar, text="Ready", style="Badge.TLabel", anchor=tk.CENTER
         )
         self.badge_label.pack(side=tk.LEFT, padx=(4, 0))
+        info = ttk.Label(header_bar, textvariable=self.image_info, style="Muted.TLabel")
+        info.pack(side=tk.RIGHT, padx=6)
 
         preview_row = ttk.Frame(composite_frame, style="Card.TFrame")
         preview_row.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -553,6 +559,7 @@ class InkSeparationApp:
 
         self.original_path = path
         self.original_image = img
+        self.image_info.set(f"{path.name} / {img.size[0]}x{img.size[1]}")
         self.info_label.config(text=f"{path.name}\n{img.size[0]} x {img.size[1]}")
         self.status_label.config(text="Splitting channels...")
         self._set_status(f"Loaded {path.name} ({img.size[0]}x{img.size[1]})")
@@ -594,8 +601,8 @@ class InkSeparationApp:
         self.update_composite()
         if not silent:
             self.status_label.config(text="Ready")
-            self.badge_label.config(text="Ready", style="Badge.TLabel")
-            self._set_status("Channel split complete")
+        self.badge_label.config(text="Ready", style="Badge.TLabel")
+        self._set_status("Channel split complete")
 
     def compute_channels(self, img: Image.Image) -> dict[str, np.ndarray]:
         """RGB -> 6채널 잉크 분리 (흡수 매트릭스 기반 역변환)."""
@@ -1214,6 +1221,8 @@ class InkSeparationApp:
                 self.global_gain.set(float(data.get("global_gain", 1.0)))
                 self.global_offset.set(float(data.get("global_offset", 0.0)))
                 self.view_gamma.set(float(data.get("view_gamma", 1.0)))
+                self.ai_enabled.set(bool(data.get("ai_enabled", False)))
+                self.ai_strength.set(float(data.get("ai_strength", 0.2)))
         except Exception:
             pass
 
@@ -1232,10 +1241,28 @@ class InkSeparationApp:
                 "global_gain": float(self.global_gain.get()),
                 "global_offset": float(self.global_offset.get()),
                 "view_gamma": float(self.view_gamma.get()),
+                "ai_enabled": bool(self.ai_enabled.get()),
+                "ai_strength": float(self.ai_strength.get()),
             }
             CONFIG_PATH.write_text(json.dumps(data, indent=2))
         except Exception:
             pass
+
+    def _reset_tuning(self) -> None:
+        self.preview_quality.set("Medium")
+        self.preview_scale.set("1.0")
+        self.precision_mode.set("Standard")
+        self.contrast_boost.set(1.0)
+        self.wb_r.set(1.0)
+        self.wb_g.set(1.0)
+        self.wb_b.set(1.0)
+        self.global_gain.set(1.0)
+        self.global_offset.set(0.0)
+        self.view_gamma.set(1.0)
+        self.ai_enabled.set(False)
+        self.ai_strength.set(0.2)
+        self._process_image()
+        self._set_status("Tuning reset to defaults")
 
     def _on_close(self) -> None:
         self._save_settings()
