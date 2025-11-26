@@ -32,9 +32,11 @@ pip install -r requirements.txt
 
 ## 실행화면
 
-- 첫 화면: <img width="2740" height="1820" alt="image1" src="https://github.com/user-attachments/assets/78857a13-0e0f-443a-aafd-0c51c7f30fd9" />
+- 첫 화면: <img width="2742" height="1738" alt="image" src="https://github.com/user-attachments/assets/5431c1db-7819-4140-ba31-df0611ce6463" />
 
-- 시뮬레이터: <img width="2784" height="1838" alt="image2" src="https://github.com/user-attachments/assets/396a4ea8-730d-4e88-bf99-f307e548f8ec" />
+
+- 시뮬레이터: <img width="2936" height="1850" alt="image" src="https://github.com/user-attachments/assets/18a6bcef-1c9b-403c-83a1-5044e3bec2af" />
+
 
 ## 주요 기능
 
