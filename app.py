@@ -690,12 +690,25 @@ class InkSeparationApp:
             selected_channels.append(arr)
         ch_stack = np.stack(selected_channels, axis=-1)
 
-        # composite 계산: match 모드는 재구성(흡수 매트릭스 역변환)으로 원본 근사
+        # composite 계산
         if self.composite_mode.get() == "match":
-            rgb_lin = rgb_linear_from_channels(ch_stack, absorb=self.absorb_matrix)
-            srgb = linear_to_srgb(rgb_lin)
-            comp_img = Image.fromarray((srgb * 255.0).astype(np.uint8), mode="RGB")
+            # 단순 감산 혼합: 광원을 흰색으로 두고 각 채널 tint만큼 흡수
+            base = np.ones(
+                (
+                    self.original_image.height,
+                    self.original_image.width,
+                    3,
+                ),
+                dtype=np.float32,
+            )
+            for idx, ch in enumerate(INK_CHANNELS):
+                tint = np.array(_hex_to_rgb01(ch["hex"]), dtype=np.float32)
+                val = ch_stack[..., idx][..., None]
+                base *= (1.0 - val * tint)
+            comp_arr = np.clip(base, 0.0, 1.0)
+            comp_img = Image.fromarray((comp_arr * 255.0).astype(np.uint8), mode="RGB")
         else:
+            # 단순 가산 틴트 프리뷰
             base = np.zeros(
                 (
                     self.original_image.height,
@@ -946,21 +959,31 @@ class InkSeparationApp:
             command=lambda: self._update_simulator(auto=False),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
-        right = ttk.Frame(win, padding=10, style="TFrame")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        # 3D 뷰
-        fig = Figure(figsize=(8, 6), dpi=100, facecolor="#2a2a2a")
+        display = ttk.Frame(win, padding=10, style="TFrame")
+        display.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        plot_frame = ttk.Frame(display, style="TFrame")
+        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        view_frame = ttk.Frame(display, style="TFrame")
+        view_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 3D 뷰 (왼쪽)
+        ttk.Label(plot_frame, text="3D Layout (Light/Films/Canvas)", style="Small.TLabel").pack(anchor=tk.W)
+        fig = Figure(figsize=(7, 6), dpi=100, facecolor="#2a2a2a")
         ax = fig.add_subplot(111, projection="3d")
-        canvas = FigureCanvasTkAgg(fig, master=right)
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
         canvas_widget = canvas.get_tk_widget()
-        canvas_widget.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        canvas_widget.pack(fill=tk.BOTH, expand=True, pady=(6, 6))
         self.sim_fig = fig
         self.sim_ax = ax
         self.sim_canvas = canvas
 
-        # 2D 결과 프리뷰
-        self.sim_preview_label = ttk.Label(right, text="시뮬레이션 결과", anchor=tk.CENTER)
-        self.sim_preview_label.pack(fill=tk.BOTH, expand=True)
+        # 2D 결과 프리뷰 (오른쪽)
+        ttk.Label(view_frame, text="Canvas View (눈으로 본 시점)", style="Small.TLabel").pack(anchor=tk.W)
+        # 관찰자 시점 창 크기를 50%로 축소
+        self.sim_preview_label = ttk.Label(view_frame, text="시뮬레이션 결과", anchor=tk.CENTER)
+        self.sim_preview_label.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        self.sim_preview_scale = 0.5
 
         self._update_simulator()
 
@@ -994,6 +1017,9 @@ class InkSeparationApp:
             key = ch["key"]
             if key not in self.channel_images:
                 continue
+            # 채널 숨김 상태이면 스킵
+            if not self.channel_enabled[key].get():
+                continue
             plate = self._render_plate_rgba(key, ch["hex"])
             plates.append({"img": plate, "hex": ch["hex"], "x": idx})
         if not plates:
@@ -1017,7 +1043,8 @@ class InkSeparationApp:
         def shift_image(img_arr: np.ndarray, dx: int, dy: int) -> np.ndarray:
             return np.roll(np.roll(img_arr, dy, axis=0), dx, axis=1)
 
-        canvas = np.ones((h, w, 3), dtype=np.float32) * light_rgb * intensity
+        # 누적 투과율 (검정 배경 → 광원 색 * 투과율)
+        canvas_trans = np.ones((h, w, 3), dtype=np.float32)
         canvas_side = 1 if canvas_x >= lx else -1
         total_count = max(len(plates) - 1, 1)
         for idx, plate_data in enumerate(plates):
@@ -1039,12 +1066,19 @@ class InkSeparationApp:
             atten = np.exp(-spacing * 0.05)
             alpha_eff = np.clip(alpha * atten, 0.0, 1.0)
             tint = np.array(_hex_to_rgb01(str(hex_color)), dtype=np.float32)
-            absorb = alpha_eff * tint
-            canvas *= (1.0 - absorb)
+            # 잉크(필름)는 tint의 보색을 흡수한다: 투과율 = 1 - alpha*(1 - tint)
+            absorb = alpha_eff * (1.0 - tint)
+            canvas_trans *= (1.0 - absorb)
 
-        canvas = np.clip(canvas, 0.0, 1.0)
-        sim_img = Image.fromarray((canvas * 255.0).astype(np.uint8), mode="RGB")
-        sim_img = sim_img.resize((w_new, h_new), Image.LANCZOS)
+        canvas_rgb = np.clip(light_rgb * intensity * canvas_trans, 0.0, 1.0)
+        sim_img = Image.fromarray((canvas_rgb * 255.0).astype(np.uint8), mode="RGB")
+        # 관찰자 시점 축소 표시
+        if hasattr(self, "sim_preview_scale"):
+            scale = float(getattr(self, "sim_preview_scale", 1.0))
+            new_size = (max(1, int(w_new * scale)), max(1, int(h_new * scale)))
+            sim_img = sim_img.resize(new_size, Image.LANCZOS)
+        else:
+            sim_img = sim_img.resize((w_new, h_new), Image.LANCZOS)
         tk_img = ImageTk.PhotoImage(sim_img)
         self.sim_preview_label.config(image=tk_img, text="")
         self.sim_preview_label.image = tk_img
