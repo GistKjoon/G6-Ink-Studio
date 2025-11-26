@@ -122,6 +122,14 @@ class InkSeparationApp:
         self.calib_preset = tk.StringVar(value="Orthogonal CMY (default)")
         self.precision_mode = tk.StringVar(value="Standard")
         self.contrast_boost = tk.DoubleVar(value=1.0)
+        self.preview_scale = tk.StringVar(value="1.0")
+        # 튜닝: 화이트밸런스/게인/오프셋/감마
+        self.wb_r = tk.DoubleVar(value=1.0)
+        self.wb_g = tk.DoubleVar(value=1.0)
+        self.wb_b = tk.DoubleVar(value=1.0)
+        self.global_gain = tk.DoubleVar(value=1.0)
+        self.global_offset = tk.DoubleVar(value=0.0)
+        self.view_gamma = tk.DoubleVar(value=1.0)
         self._load_settings()
 
         # UI 생성
@@ -259,6 +267,19 @@ class InkSeparationApp:
             "High",
         ).pack(side=tk.LEFT, anchor=tk.W)
 
+        ttk.Label(control, text="Preview Scale (performance)", style="Small.TLabel").pack(anchor=tk.W, pady=(6, 2))
+        scale_row = ttk.Frame(control, style="TFrame")
+        scale_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.OptionMenu(
+            scale_row,
+            self.preview_scale,
+            self.preview_scale.get(),
+            "1.0",
+            "0.75",
+            "0.5",
+            command=lambda _=None: self._process_image(),
+        ).pack(side=tk.LEFT, anchor=tk.W)
+
         ttk.Label(control, text="Separation Quality", style="Small.TLabel").pack(anchor=tk.W, pady=(6, 2))
         pq_row = ttk.Frame(control, style="TFrame")
         pq_row.pack(fill=tk.X, pady=(0, 4))
@@ -279,6 +300,55 @@ class InkSeparationApp:
             variable=self.contrast_boost,
             command=lambda _=None: self._process_image(),
         ).pack(fill=tk.X, pady=(0, 6))
+
+        # 이미지 튜닝 (화이트밸런스/게인/오프셋/감마)
+        tuning = ttk.Labelframe(control, text="Image Tuning", padding=8, style="Card.TLabelframe")
+        tuning.pack(fill=tk.X, pady=(6, 8))
+        for lbl, var in (("WB R", self.wb_r), ("WB G", self.wb_g), ("WB B", self.wb_b)):
+            row = ttk.Frame(tuning, style="TFrame")
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=lbl, style="Muted.TLabel", width=6).pack(side=tk.LEFT)
+            ttk.Scale(
+                row,
+                from_=0.5,
+                to=1.5,
+                orient=tk.HORIZONTAL,
+                variable=var,
+                command=lambda _=None: self._process_image(),
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        row_gain = ttk.Frame(tuning, style="TFrame")
+        row_gain.pack(fill=tk.X, pady=2)
+        ttk.Label(row_gain, text="Gain", style="Muted.TLabel", width=6).pack(side=tk.LEFT)
+        ttk.Scale(
+            row_gain,
+            from_=0.5,
+            to=1.5,
+            orient=tk.HORIZONTAL,
+            variable=self.global_gain,
+            command=lambda _=None: self._process_image(),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        row_off = ttk.Frame(tuning, style="TFrame")
+        row_off.pack(fill=tk.X, pady=2)
+        ttk.Label(row_off, text="Offset", style="Muted.TLabel", width=6).pack(side=tk.LEFT)
+        ttk.Scale(
+            row_off,
+            from_=-0.1,
+            to=0.1,
+            orient=tk.HORIZONTAL,
+            variable=self.global_offset,
+            command=lambda _=None: self._process_image(),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        row_gamma = ttk.Frame(tuning, style="TFrame")
+        row_gamma.pack(fill=tk.X, pady=2)
+        ttk.Label(row_gamma, text="Gamma", style="Muted.TLabel", width=6).pack(side=tk.LEFT)
+        ttk.Scale(
+            row_gamma,
+            from_=0.8,
+            to=2.2,
+            orient=tk.HORIZONTAL,
+            variable=self.view_gamma,
+            command=lambda _=None: self._process_image(),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         ttk.Label(control, text="Composite Preview", style="Small.TLabel").pack(
             anchor=tk.W, pady=(8, 4)
@@ -487,24 +557,37 @@ class InkSeparationApp:
         self._process_image()
         self._set_status("Parameters reset")
 
-    def _process_image(self) -> None:
+    def _process_image(self, full: bool = False, silent: bool = False) -> None:
         if self.original_image is None:
             return
-        self.channel_arrays = self.compute_channels(self.original_image)
+        scale = 1.0 if full else float(self.preview_scale.get())
+        if scale < 1.0:
+            w, h = self.original_image.size
+            new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            work_img = self.original_image.resize(new_size, Image.LANCZOS)
+        else:
+            work_img = self.original_image
+        self.channel_arrays = self.compute_channels(work_img)
         self.channel_images = {
             key: self._array_to_image(arr) for key, arr in self.channel_arrays.items()
         }
         self._update_channel_previews()
         self._update_original_preview()
         self.update_composite()
-        self.status_label.config(text="Ready")
-        self.badge_label.config(text="Ready", style="Badge.TLabel")
-        self._set_status("Channel split complete")
+        if not silent:
+            self.status_label.config(text="Ready")
+            self.badge_label.config(text="Ready", style="Badge.TLabel")
+            self._set_status("Channel split complete")
 
     def compute_channels(self, img: Image.Image) -> dict[str, np.ndarray]:
         """RGB -> 6채널 잉크 분리 (흡수 매트릭스 기반 역변환)."""
         dtype = np.float64 if self.precision_mode.get() == "High" else np.float32
         rgb = np.asarray(img.convert("RGB"), dtype=dtype) / 255.0
+        # 화이트밸런스, 게인/오프셋 적용
+        wb = np.array([self.wb_r.get(), self.wb_g.get(), self.wb_b.get()], dtype=dtype)
+        rgb = rgb * wb
+        rgb = rgb * float(self.global_gain.get()) + float(self.global_offset.get())
+        rgb = np.clip(rgb, 0.0, 1.0)
         rgb_lin = srgb_to_linear(rgb)
         channels = channels_from_rgb_linear(
             rgb_lin, absorb=self.absorb_matrix, pinv=self.absorb_pinv
@@ -557,13 +640,23 @@ class InkSeparationApp:
         if self.original_image is None:
             return
 
+        def _resize_channel(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+            h, w = arr.shape
+            if (w, h) == size:
+                return arr
+            img = Image.fromarray((np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L")
+            img = img.resize(size, Image.LANCZOS)
+            return np.asarray(img, dtype=np.float32) / 255.0
+
         # 선택된 채널만 남긴다
         selected_channels = []
+        target_size = self.original_image.size
         for ch in INK_CHANNELS:
             key = ch["key"]
             arr = self.channel_arrays[key]
             if not self.channel_enabled[key].get():
                 arr = np.zeros_like(arr)
+            arr = _resize_channel(arr, target_size)
             selected_channels.append(arr)
         ch_stack = np.stack(selected_channels, axis=-1)
 
@@ -589,6 +682,12 @@ class InkSeparationApp:
             comp_img = Image.fromarray((base * 255.0).astype(np.uint8), mode="RGB")
 
         disp = comp_img.copy()
+        if float(self.view_gamma.get()) != 1.0:
+            gamma = float(self.view_gamma.get())
+            disp = disp.convert("RGB")
+            arr = np.asarray(disp, dtype=np.float32) / 255.0
+            arr = np.clip(arr ** (1.0 / gamma), 0.0, 1.0)
+            disp = Image.fromarray((arr * 255.0).astype(np.uint8), mode="RGB")
         disp.thumbnail(self.preview_size)
         self.tk_composite = ImageTk.PhotoImage(disp)
         self.composite_label.config(image=self.tk_composite, text="")
@@ -608,6 +707,8 @@ class InkSeparationApp:
         export_dir = Path("exports")
         export_dir.mkdir(parents=True, exist_ok=True)
 
+        # Export 시 풀 해상도로 재계산
+        self._process_image(full=True, silent=True)
         stem = self.original_path.stem if self.original_path else "output"
         for ch in INK_CHANNELS:
             key = ch["key"]
@@ -621,6 +722,8 @@ class InkSeparationApp:
         comp.save(comp_path)
         messagebox.showinfo("Exported", f"저장됨: {export_dir}")
         self._set_status(f"Exported to {export_dir}")
+        # 프리뷰 상태 복원
+        self._process_image(full=False, silent=True)
 
     def _composite_full_res(self) -> Image.Image:
         """내보내기용 전체 해상도 합성."""
@@ -747,6 +850,7 @@ class InkSeparationApp:
         win.title("Light/Film Simulator")
         win.geometry("1400x900")
         win.configure(bg="#1c1c1c")
+        win.protocol("WM_DELETE_WINDOW", self._close_sim_window)
         self.sim_window = win
 
         panel = ttk.Frame(win, padding=12, style="TFrame")
@@ -925,12 +1029,12 @@ class InkSeparationApp:
         )
         if self.sim_info is None:
             self.sim_info = tk.StringVar()
-        self.sim_info.set(
-            f"Light: ({lx:.1f}, {ly:.1f}, {lz:.1f})  Canvas X: {canvas_x:.1f}  Plates: {len(plates)}"
-        )
+            self.sim_info.set(
+                f"Light: ({lx:.1f}, {ly:.1f}, {lz:.1f})  Canvas X: {canvas_x:.1f}  Plates: {len(plates)}"
+            )
         if self.sim_preview_label.master:
             info_label = getattr(self, "_sim_status_label", None)
-            if info_label is None:
+            if info_label is None or not info_label.winfo_exists():
                 status_row = ttk.Frame(self.sim_preview_label.master, style="TFrame")
                 status_row.pack(fill=tk.X, pady=(6, 0))
                 info_lbl = ttk.Label(status_row, textvariable=self.sim_info, style="Muted.TLabel")
@@ -938,6 +1042,16 @@ class InkSeparationApp:
                 self._sim_status_label = info_lbl
             else:
                 info_label.configure(textvariable=self.sim_info)
+
+    def _close_sim_window(self) -> None:
+        if self.sim_window and tk.Toplevel.winfo_exists(self.sim_window):
+            try:
+                self.sim_window.destroy()
+            except Exception:
+                pass
+        self.sim_window = None
+        if hasattr(self, "_sim_status_label"):
+            delattr(self, "_sim_status_label")
 
     def _enhance_channel_maps(self, channels: np.ndarray) -> np.ndarray:
         """채널 대비 보정: 퍼센타일 스트레치 + 선택적 감마."""
@@ -1069,6 +1183,15 @@ class InkSeparationApp:
                 data = json.loads(CONFIG_PATH.read_text())
                 self.preview_quality.set(data.get("preview_quality", "Medium"))
                 self.calib_preset.set(data.get("calib_preset", "Orthogonal CMY (default)"))
+                self.preview_scale.set(data.get("preview_scale", "1.0"))
+                self.precision_mode.set(data.get("precision_mode", "Standard"))
+                self.contrast_boost.set(float(data.get("contrast_boost", 1.0)))
+                self.wb_r.set(float(data.get("wb_r", 1.0)))
+                self.wb_g.set(float(data.get("wb_g", 1.0)))
+                self.wb_b.set(float(data.get("wb_b", 1.0)))
+                self.global_gain.set(float(data.get("global_gain", 1.0)))
+                self.global_offset.set(float(data.get("global_offset", 0.0)))
+                self.view_gamma.set(float(data.get("view_gamma", 1.0)))
         except Exception:
             pass
 
@@ -1078,6 +1201,15 @@ class InkSeparationApp:
             data = {
                 "preview_quality": self.preview_quality.get(),
                 "calib_preset": self.calib_preset.get(),
+                "preview_scale": self.preview_scale.get(),
+                "precision_mode": self.precision_mode.get(),
+                "contrast_boost": float(self.contrast_boost.get()),
+                "wb_r": float(self.wb_r.get()),
+                "wb_g": float(self.wb_g.get()),
+                "wb_b": float(self.wb_b.get()),
+                "global_gain": float(self.global_gain.get()),
+                "global_offset": float(self.global_offset.get()),
+                "view_gamma": float(self.view_gamma.get()),
             }
             CONFIG_PATH.write_text(json.dumps(data, indent=2))
         except Exception:
