@@ -98,8 +98,8 @@ class InkSeparationApp:
         self.preview_size: tuple[int, int] = (880, 600)
 
         # 파라미터
-        self.red_boost = tk.DoubleVar(value=1.0)
-        self.gray_neutral = tk.DoubleVar(value=0.8)
+        self.red_boost = tk.DoubleVar(value=0.5)
+        self.gray_neutral = tk.DoubleVar(value=0.9)
         self.composite_mode = tk.StringVar(value="match")  # match: 원본과 동일한 색, tint: 채널 틴트
         self.absorb_matrix = DEFAULT_ABSORBANCE
         self.absorb_pinv = DEFAULT_PINV
@@ -561,7 +561,7 @@ class InkSeparationApp:
 
     def _reset_params(self) -> None:
         self.red_boost.set(0.5)
-        self.gray_neutral.set(1.1)
+        self.gray_neutral.set(0.9)
         self._process_image()
         self._set_status("Parameters reset")
 
@@ -588,27 +588,49 @@ class InkSeparationApp:
         self._set_status("Channel split complete")
 
     def compute_channels(self, img: Image.Image) -> dict[str, np.ndarray]:
-        """RGB -> 6채널 잉크 분리 (흡수 매트릭스 기반 역변환)."""
+        """RGB -> 6채널 분리: 단순 CMYK + Red + Gray 방식으로 크로스톡 최소화."""
         dtype = np.float64 if self.precision_mode.get() == "High" else np.float32
         rgb = np.asarray(img.convert("RGB"), dtype=dtype) / 255.0
-        # 화이트밸런스, 게인/오프셋 적용
+
+        # 화이트밸런스 & 게인/오프셋
         wb = np.array([self.wb_r.get(), self.wb_g.get(), self.wb_b.get()], dtype=dtype)
         rgb = rgb * wb
         rgb = rgb * float(self.global_gain.get()) + float(self.global_offset.get())
         rgb = np.clip(rgb, 0.0, 1.0)
+
+        # 선형 공간에서 분리
         rgb_lin = srgb_to_linear(rgb)
-        channels = channels_from_rgb_linear(
-            rgb_lin, absorb=self.absorb_matrix, pinv=self.absorb_pinv
-        )
+        r, g, b = [rgb_lin[..., i] for i in range(3)]
 
-        # 선택적 튜닝
-        red_idx = 4  # INK_CHANNELS에서 red의 인덱스
-        gray_idx = 5  # INK_CHANNELS에서 gray의 인덱스
-        channels[..., red_idx] *= float(self.red_boost.get())
-        channels[..., gray_idx] *= float(self.gray_neutral.get())
-        channels = np.clip(channels, 0.0, 1.0)
+        # 기본 CMY
+        c0 = 1.0 - r
+        m0 = 1.0 - g
+        y0 = 1.0 - b
 
-        # 고급 대비 보정
+        # 블랙 추출 후 잔여 CMY (표준 CMYK)
+        k = np.minimum(np.minimum(c0, m0), y0)
+        denom = 1.0 - k + 1e-6
+        c = np.clip((c0 - k) / denom, 0.0, 1.0)
+        m = np.clip((m0 - k) / denom, 0.0, 1.0)
+        y = np.clip((y0 - k) / denom, 0.0, 1.0)
+        k = np.clip(k, 0.0, 1.0)
+
+        # Red: R이 우세한 영역만 추출
+        red_residual = np.clip(r - np.maximum(g, b), 0.0, 1.0)
+
+        # Gray: 채도가 낮은 영역을 밝기 기반으로 분리
+        max_ch = np.maximum.reduce([r, g, b])
+        min_ch = np.minimum.reduce([r, g, b])
+        sat = np.clip((max_ch - min_ch) / (max_ch + 1e-6), 0.0, 1.0)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        gray = np.clip((1.0 - sat) * luminance, 0.0, 1.0)
+
+        # 튜닝
+        red_residual *= float(self.red_boost.get())
+        gray *= float(self.gray_neutral.get())
+
+        # 채널 스택
+        channels = np.stack([c, m, y, k, red_residual, gray], axis=-1)
         channels = self._enhance_channel_maps(channels)
 
         return {
