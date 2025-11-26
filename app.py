@@ -18,7 +18,6 @@ matplotlib.use("TkAgg")
 CONFIG_DIR = Path.home() / ".g6_ink_studio"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
-from ai_enhance import refine_channels
 from color_model import (
     DEFAULT_ABSORBANCE,
     DEFAULT_PINV,
@@ -119,20 +118,18 @@ class InkSeparationApp:
         self.sim_canvas: FigureCanvasTkAgg | None = None
         self.auto_render = tk.BooleanVar(value=True)
         self.sim_info: tk.StringVar | None = None
-        self.preview_quality = tk.StringVar(value="Medium")
+        self.preview_quality = tk.StringVar(value="High")
         self.calib_preset = tk.StringVar(value="Orthogonal CMY (default)")
-        self.precision_mode = tk.StringVar(value="Standard")
-        self.contrast_boost = tk.DoubleVar(value=1.0)
+        self.precision_mode = tk.StringVar(value="High")
+        self.contrast_boost = tk.DoubleVar(value=0.8)
         self.preview_scale = tk.StringVar(value="1.0")
         # 튜닝: 화이트밸런스/게인/오프셋/감마
         self.wb_r = tk.DoubleVar(value=1.0)
         self.wb_g = tk.DoubleVar(value=1.0)
         self.wb_b = tk.DoubleVar(value=1.0)
-        self.global_gain = tk.DoubleVar(value=1.0)
+        self.global_gain = tk.DoubleVar(value=0.95)
         self.global_offset = tk.DoubleVar(value=0.0)
         self.view_gamma = tk.DoubleVar(value=1.0)
-        self.ai_enabled = tk.BooleanVar(value=False)
-        self.ai_strength = tk.DoubleVar(value=0.2)
         self.image_info = tk.StringVar(value="No image")
         self._load_settings()
 
@@ -357,20 +354,6 @@ class InkSeparationApp:
             command=lambda _=None: self._process_image(),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        ai_frame = ttk.Labelframe(control, text="AI Enhance (exp.)", padding=8, style="Card.TLabelframe")
-        ai_frame.pack(fill=tk.X, pady=(6, 8))
-        ttk.Checkbutton(
-            ai_frame, text="Enable AI edge-guided smoothing", variable=self.ai_enabled, command=self._process_image
-        ).pack(anchor=tk.W)
-        ttk.Label(ai_frame, text="Strength", style="Muted.TLabel").pack(anchor=tk.W, pady=(4, 2))
-        ttk.Scale(
-            ai_frame,
-            from_=0.0,
-            to=0.5,
-            orient=tk.HORIZONTAL,
-            variable=self.ai_strength,
-            command=lambda _=None: self._process_image(),
-        ).pack(fill=tk.X)
 
         ttk.Label(control, text="Composite Preview", style="Small.TLabel").pack(
             anchor=tk.W, pady=(8, 4)
@@ -577,8 +560,8 @@ class InkSeparationApp:
         self._set_status("All channels enabled")
 
     def _reset_params(self) -> None:
-        self.red_boost.set(1.0)
-        self.gray_neutral.set(0.8)
+        self.red_boost.set(0.5)
+        self.gray_neutral.set(1.1)
         self._process_image()
         self._set_status("Parameters reset")
 
@@ -627,10 +610,6 @@ class InkSeparationApp:
 
         # 고급 대비 보정
         channels = self._enhance_channel_maps(channels)
-
-        # AI 실험적 스무딩
-        if self.ai_enabled.get():
-            channels = refine_channels(rgb, channels, strength=float(self.ai_strength.get()), blur_k=5)
 
         return {
             "cyan": channels[..., 0],
@@ -1089,7 +1068,7 @@ class InkSeparationApp:
         out = np.empty_like(channels)
         for idx in range(channels.shape[-1]):
             ch = channels[..., idx]
-            lo, hi = np.percentile(ch, [0.5, 99.5])
+            lo, hi = np.percentile(ch, [1.0, 99.0])
             if hi - lo < 1e-5:
                 out[..., idx] = ch
                 continue
@@ -1221,8 +1200,6 @@ class InkSeparationApp:
                 self.global_gain.set(float(data.get("global_gain", 1.0)))
                 self.global_offset.set(float(data.get("global_offset", 0.0)))
                 self.view_gamma.set(float(data.get("view_gamma", 1.0)))
-                self.ai_enabled.set(bool(data.get("ai_enabled", False)))
-                self.ai_strength.set(float(data.get("ai_strength", 0.2)))
         except Exception:
             pass
 
@@ -1241,26 +1218,22 @@ class InkSeparationApp:
                 "global_gain": float(self.global_gain.get()),
                 "global_offset": float(self.global_offset.get()),
                 "view_gamma": float(self.view_gamma.get()),
-                "ai_enabled": bool(self.ai_enabled.get()),
-                "ai_strength": float(self.ai_strength.get()),
             }
             CONFIG_PATH.write_text(json.dumps(data, indent=2))
         except Exception:
             pass
 
     def _reset_tuning(self) -> None:
-        self.preview_quality.set("Medium")
+        self.preview_quality.set("High")
         self.preview_scale.set("1.0")
-        self.precision_mode.set("Standard")
-        self.contrast_boost.set(1.0)
+        self.precision_mode.set("High")
+        self.contrast_boost.set(0.8)
         self.wb_r.set(1.0)
         self.wb_g.set(1.0)
         self.wb_b.set(1.0)
-        self.global_gain.set(1.0)
+        self.global_gain.set(0.95)
         self.global_offset.set(0.0)
         self.view_gamma.set(1.0)
-        self.ai_enabled.set(False)
-        self.ai_strength.set(0.2)
         self._process_image()
         self._set_status("Tuning reset to defaults")
 
